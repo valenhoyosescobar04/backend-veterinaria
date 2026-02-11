@@ -1,0 +1,538 @@
+package com.vetclinic.service;
+
+import com.vetclinic.dto.owner.CreateOwnerRequest;
+import com.vetclinic.dto.owner.OwnerDTO;
+import com.vetclinic.dto.owner.UpdateOwnerRequest;
+import com.vetclinic.entity.Appointment;
+import com.vetclinic.entity.Owner;
+import com.vetclinic.entity.Role;
+import com.vetclinic.entity.User;
+import com.vetclinic.exception.BadRequestException;
+import com.vetclinic.exception.DuplicateResourceException;
+import com.vetclinic.exception.ResourceNotFoundException;
+import com.vetclinic.patterns.adapter.EmailServiceAdapter;
+import com.vetclinic.patterns.adapter.SmsServiceAdapter;
+import com.vetclinic.repository.AppointmentActionTokenRepository;
+import com.vetclinic.repository.AppointmentRepository;
+import com.vetclinic.repository.InformedConsentRepository;
+import com.vetclinic.repository.MedicalRecordRepository;
+import com.vetclinic.repository.OwnerRepository;
+import com.vetclinic.repository.PasswordResetTokenRepository;
+import com.vetclinic.repository.PatientRepository;
+import com.vetclinic.repository.PrescriptionRepository;
+import com.vetclinic.repository.RoleRepository;
+import com.vetclinic.repository.UserRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.EntityManager;
+
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Servicio para la gestión de propietarios
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+@Transactional
+public class OwnerService {
+
+    private final OwnerRepository ownerRepository;
+    private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
+    private final AppointmentRepository appointmentRepository;
+    private final AppointmentActionTokenRepository appointmentActionTokenRepository;
+    private final InformedConsentRepository informedConsentRepository;
+    private final MedicalRecordRepository medicalRecordRepository;
+    private final PatientRepository patientRepository;
+    private final PrescriptionRepository prescriptionRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
+    private final EntityManager entityManager;
+    private final PasswordEncoder passwordEncoder;
+    private final EmailServiceAdapter emailServiceAdapter;
+    private final SmsServiceAdapter smsServiceAdapter;
+    private final EmailTemplateService emailTemplateService;
+    private final SmsTemplateService smsTemplateService;
+
+    @Value("${app.frontend-url:http://localhost:5173}")
+    private String frontendUrl;
+
+    /**
+     * Crear un nuevo propietario con usuario asociado
+     */
+    public OwnerDTO createOwner(CreateOwnerRequest request) {
+        log.info("Creando nuevo propietario: {} {}", request.getFirstName(), request.getLastName());
+
+        // Verificar email duplicado
+        if (ownerRepository.existsByEmailAndIsActiveTrue(request.getEmail())) {
+            throw new DuplicateResourceException("Ya existe un propietario con el email: " + request.getEmail());
+        }
+
+        // Verificar username duplicado
+        if (userRepository.findByUsername(request.getUsername()).isPresent()) {
+            throw new BadRequestException("El nombre de usuario ya existe");
+        }
+
+        // Verificar email de usuario duplicado
+        if (userRepository.findByEmail(request.getEmail()).isPresent()) {
+            throw new BadRequestException("El email ya está registrado como usuario");
+        }
+
+        // Verificar documento duplicado si se proporciona
+        if (request.getDocumentNumber() != null && !request.getDocumentNumber().isEmpty()) {
+            if (ownerRepository.existsByDocumentNumberAndIsActiveTrue(request.getDocumentNumber())) {
+                throw new DuplicateResourceException("Ya existe un propietario con el número de documento: " + request.getDocumentNumber());
+            }
+        }
+
+        // Crear usuario con rol OWNER
+        Role ownerRole = roleRepository.findByName("OWNER")
+                .orElseThrow(() -> new ResourceNotFoundException("Role", "name", "OWNER"));
+
+        Set<Role> roles = new HashSet<>();
+        roles.add(ownerRole);
+
+        User user = User.builder()
+                .username(request.getUsername())
+                .email(request.getEmail())
+                .password(passwordEncoder.encode(request.getPassword()))
+                .firstName(request.getFirstName())
+                .lastName(request.getLastName())
+                .phone(request.getPhone())
+                .roles(roles)
+                .isActive(true)
+                .build();
+
+        User savedUser = userRepository.save(user);
+        log.info("Usuario creado exitosamente con ID: {}", savedUser.getId());
+
+        // Crear propietario
+        Owner owner = new Owner();
+        owner.setFirstName(request.getFirstName());
+        owner.setLastName(request.getLastName());
+        owner.setEmail(request.getEmail());
+        owner.setPhone(request.getPhone());
+        owner.setAlternativePhone(request.getAlternativePhone());
+        owner.setAddress(request.getAddress());
+        owner.setCity(request.getCity());
+        owner.setPostalCode(request.getPostalCode());
+        owner.setDocumentType(request.getDocumentType());
+        owner.setDocumentNumber(request.getDocumentNumber());
+        owner.setNotes(request.getNotes());
+        owner.setUserId(savedUser.getId());
+        owner.setIsActive(true);
+
+        Owner savedOwner = ownerRepository.save(owner);
+        log.info("Propietario creado exitosamente con ID: {}", savedOwner.getId());
+
+        // Enviar email de bienvenida al propietario
+        try {
+            sendOwnerWelcomeEmail(savedOwner, savedUser, request.getPassword());
+        } catch (Exception e) {
+            log.error("Error al enviar email de bienvenida al propietario: {}", savedOwner.getEmail(), e);
+            // No lanzar excepción para no fallar la creación del propietario
+        }
+
+        return mapToDTO(savedOwner, savedUser);
+    }
+
+    /**
+     * Enviar email y SMS de bienvenida al propietario
+     */
+    private void sendOwnerWelcomeEmail(Owner owner, User user, String password) {
+        String subject = "¡Bienvenido a VetClinic Pro!";
+        String loginUrl = frontendUrl + "/login";
+        String htmlBody = emailTemplateService.getOwnerWelcomeEmailTemplate(
+                owner.getFullName(),
+                user.getUsername(),
+                password,
+                loginUrl
+        );
+
+        // Enviar email
+        emailServiceAdapter.sendHtmlEmail(owner.getEmail(), subject, htmlBody);
+        log.info("Email de bienvenida enviado al propietario: {}", owner.getEmail());
+        
+        // Enviar SMS si está disponible y el propietario tiene teléfono
+        if (owner.getPhone() != null && smsServiceAdapter.isAvailable()) {
+            try {
+                String smsMessage = smsTemplateService.getWelcomeSms(owner.getFullName());
+                smsServiceAdapter.sendSms(owner.getPhone(), smsMessage);
+                log.info("✅ SMS de bienvenida enviado al propietario: {}", owner.getPhone());
+            } catch (Exception e) {
+                log.error("Error al enviar SMS de bienvenida al propietario: {}", owner.getPhone(), e);
+                // No lanzar excepción para no fallar la creación del propietario
+            }
+        }
+    }
+
+    /**
+     * Obtener todos los propietarios activos
+     */
+    @Transactional(readOnly = true)
+    public List<OwnerDTO> getAllOwners() {
+        log.info("Obteniendo lista de todos los propietarios activos");
+        return ownerRepository.findAllByIsActiveTrueOrderByLastNameAsc()
+                .stream()
+                .map(owner -> {
+                    User user = owner.getUserId() != null ?
+                            userRepository.findById(owner.getUserId()).orElse(null) : null;
+                    return mapToDTO(owner, user);
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Obtener propietarios con paginación
+     */
+    @Transactional(readOnly = true)
+    public Page<OwnerDTO> getOwnersPage(Pageable pageable) {
+        log.info("Obteniendo página de propietarios: {}", pageable);
+        return ownerRepository.findAllByIsActiveTrue(pageable)
+                .map(owner -> {
+                    User user = owner.getUserId() != null ?
+                            userRepository.findById(owner.getUserId()).orElse(null) : null;
+                    return mapToDTO(owner, user);
+                });
+    }
+
+    /**
+     * Obtener propietario por ID
+     */
+    @Transactional(readOnly = true)
+    public OwnerDTO getOwnerById(Long id) {
+        log.info("Buscando propietario con ID: {}", id);
+        Owner owner = ownerRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Propietario no encontrado con ID: " + id));
+
+        if (!owner.getIsActive()) {
+            throw new ResourceNotFoundException("Propietario no encontrado con ID: " + id);
+        }
+
+        User user = owner.getUserId() != null ?
+                userRepository.findById(owner.getUserId()).orElse(null) : null;
+
+        return mapToDTO(owner, user);
+    }
+
+    /**
+     * Obtener propietario por User ID
+     */
+    @Transactional(readOnly = true)
+    public Owner getOwnerByUserId(String userId) {
+        log.info("Buscando propietario con User ID: {}", userId);
+        return ownerRepository.findByUserIdAndIsActiveTrue(java.util.UUID.fromString(userId))
+                .orElseThrow(() -> new ResourceNotFoundException("Propietario no encontrado para el usuario"));
+    }
+
+    /**
+     * Buscar propietarios
+     */
+    @Transactional(readOnly = true)
+    public Page<OwnerDTO> searchOwners(String searchTerm, Pageable pageable) {
+        log.info("Buscando propietarios con término: {}", searchTerm);
+        return ownerRepository.searchOwners(searchTerm, pageable)
+                .map(owner -> {
+                    User user = owner.getUserId() != null ?
+                            userRepository.findById(owner.getUserId()).orElse(null) : null;
+                    return mapToDTO(owner, user);
+                });
+    }
+
+    /**
+     * Actualizar propietario
+     */
+    public OwnerDTO updateOwner(Long id, UpdateOwnerRequest request) {
+        log.info("Actualizando propietario con ID: {}", id);
+
+        Owner owner = ownerRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Propietario no encontrado con ID: " + id));
+
+        // Verificar email duplicado si cambió
+        if (request.getEmail() != null && !request.getEmail().equals(owner.getEmail())) {
+            if (ownerRepository.existsByEmailAndIsActiveTrue(request.getEmail())) {
+                throw new DuplicateResourceException("Ya existe un propietario con el email: " + request.getEmail());
+            }
+            owner.setEmail(request.getEmail());
+        }
+
+        // Verificar documento duplicado si cambió
+        if (request.getDocumentNumber() != null && !request.getDocumentNumber().equals(owner.getDocumentNumber())) {
+            if (ownerRepository.existsByDocumentNumberAndIsActiveTrue(request.getDocumentNumber())) {
+                throw new DuplicateResourceException("Ya existe un propietario con el número de documento: " + request.getDocumentNumber());
+            }
+            owner.setDocumentNumber(request.getDocumentNumber());
+        }
+
+        // Actualizar campos
+        if (request.getFirstName() != null) owner.setFirstName(request.getFirstName());
+        if (request.getLastName() != null) owner.setLastName(request.getLastName());
+        if (request.getPhone() != null) owner.setPhone(request.getPhone());
+        if (request.getAlternativePhone() != null) owner.setAlternativePhone(request.getAlternativePhone());
+        if (request.getAddress() != null) owner.setAddress(request.getAddress());
+        if (request.getCity() != null) owner.setCity(request.getCity());
+        if (request.getPostalCode() != null) owner.setPostalCode(request.getPostalCode());
+        if (request.getDocumentType() != null) owner.setDocumentType(request.getDocumentType());
+        if (request.getNotes() != null) owner.setNotes(request.getNotes());
+        if (request.getIsActive() != null) owner.setIsActive(request.getIsActive());
+
+        Owner updatedOwner = ownerRepository.save(owner);
+        log.info("Propietario actualizado exitosamente");
+
+        User user = owner.getUserId() != null ?
+                userRepository.findById(owner.getUserId()).orElse(null) : null;
+
+        return mapToDTO(updatedOwner, user);
+    }
+
+    /**
+     * Eliminar propietario (hard delete)
+     * Elimina en cascada todos los pacientes y toda la información relacionada
+     */
+    @Transactional
+    public void deleteOwner(Long id) {
+        log.info("Eliminando propietario con ID: {} y toda su información relacionada", id);
+
+        Owner owner = ownerRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Propietario no encontrado con ID: " + id));
+
+        // Cargar pacientes del propietario
+        List<com.vetclinic.entity.Patient> patients = patientRepository.findByOwnerId(id);
+        
+        if (!patients.isEmpty()) {
+            log.info("El propietario tiene {} paciente(s). Eliminando pacientes y toda su información relacionada...", patients.size());
+            
+            // Para cada paciente, eliminar toda su información relacionada
+            for (com.vetclinic.entity.Patient patient : patients) {
+                try {
+                    log.info("Eliminando información del paciente ID: {} ({})", patient.getId(), patient.getName());
+                    
+                    // 1. Obtener todas las citas del paciente (activas e inactivas) usando consulta personalizada
+                    @SuppressWarnings("unchecked")
+                    List<Appointment> patientAppointments = entityManager.createQuery(
+                        "SELECT a FROM Appointment a WHERE a.patient.id = :patientId")
+                        .setParameter("patientId", patient.getId())
+                        .getResultList();
+                    
+                    // Eliminar tokens de acción de citas relacionadas con las citas del paciente
+                    // Usar consulta nativa para evitar problemas con relaciones lazy
+                    if (!patientAppointments.isEmpty()) {
+                        List<Long> appointmentIds = patientAppointments.stream()
+                            .map(Appointment::getId)
+                            .collect(Collectors.toList());
+                        
+                        if (!appointmentIds.isEmpty()) {
+                            try {
+                                int deletedTokens = entityManager.createNativeQuery(
+                                    "DELETE FROM appointment_action_tokens WHERE appointment_id IN (:appointmentIds)")
+                                    .setParameter("appointmentIds", appointmentIds)
+                                    .executeUpdate();
+                                log.debug("Eliminados {} token(s) de acción para las citas del paciente", deletedTokens);
+                            } catch (Exception e) {
+                                log.warn("Error al eliminar tokens de acción: {}", e.getMessage());
+                            }
+                        }
+                    }
+                    
+                    // 2. Eliminar registros médicos del paciente primero (esto eliminará automáticamente 
+                    //    prescripciones e informed consents relacionados por cascade)
+                    @SuppressWarnings("unchecked")
+                    List<com.vetclinic.entity.MedicalRecord> medicalRecords = entityManager.createQuery(
+                        "SELECT mr FROM MedicalRecord mr WHERE mr.patient.id = :patientId")
+                        .setParameter("patientId", patient.getId())
+                        .getResultList();
+                    if (!medicalRecords.isEmpty()) {
+                        medicalRecordRepository.deleteAll(medicalRecords);
+                        entityManager.flush(); // Asegurar que se eliminen antes de continuar
+                        log.info("Eliminados {} registro(s) médico(s) del paciente (y sus prescripciones/consentimientos relacionados)", medicalRecords.size());
+                    }
+                    
+                    // 3. Eliminar prescripciones restantes del paciente (si hay alguna sin medical record)
+                    @SuppressWarnings("unchecked")
+                    List<com.vetclinic.entity.Prescription> prescriptions = entityManager.createQuery(
+                        "SELECT p FROM Prescription p WHERE p.patient.id = :patientId")
+                        .setParameter("patientId", patient.getId())
+                        .getResultList();
+                    if (!prescriptions.isEmpty()) {
+                        prescriptionRepository.deleteAll(prescriptions);
+                        log.info("Eliminadas {} prescripción(es) restantes del paciente", prescriptions.size());
+                    }
+                    
+                    // 4. Eliminar consentimientos informados restantes del paciente (si hay alguno sin medical record)
+                    @SuppressWarnings("unchecked")
+                    List<com.vetclinic.entity.InformedConsent> patientConsents = entityManager.createQuery(
+                        "SELECT ic FROM InformedConsent ic WHERE ic.patient.id = :patientId")
+                        .setParameter("patientId", patient.getId())
+                        .getResultList();
+                    if (!patientConsents.isEmpty()) {
+                        informedConsentRepository.deleteAll(patientConsents);
+                        log.info("Eliminados {} consentimiento(s) informado(s) restantes del paciente", patientConsents.size());
+                    }
+                    
+                    // 5. Eliminar citas del paciente
+                    if (!patientAppointments.isEmpty()) {
+                        appointmentRepository.deleteAll(patientAppointments);
+                        log.info("Eliminadas {} cita(s) del paciente", patientAppointments.size());
+                    }
+                    
+                    // 6. Eliminar el paciente
+                    patientRepository.delete(patient);
+                    log.info("Paciente ID: {} eliminado exitosamente", patient.getId());
+                } catch (Exception e) {
+                    log.error("Error al eliminar información del paciente ID {}: {}", patient.getId(), e.getMessage(), e);
+                    throw new IllegalStateException("Error al eliminar información del paciente: " + e.getMessage(), e);
+                }
+            }
+            
+            entityManager.flush(); // Asegurar que todo se elimine antes de continuar
+            log.info("Todos los pacientes y su información relacionada han sido eliminados");
+        }
+
+        // Eliminar citas asociadas directamente al propietario (por si acaso quedan algunas)
+        List<Appointment> ownerAppointments = appointmentRepository.findByOwnerIdOrderByScheduledDateDesc(id);
+        if (!ownerAppointments.isEmpty()) {
+            log.info("Eliminando {} cita(s) asociada(s) directamente al propietario", ownerAppointments.size());
+            
+            // Eliminar tokens de acción de estas citas usando consulta nativa
+            List<Long> ownerAppointmentIds = ownerAppointments.stream()
+                .map(Appointment::getId)
+                .collect(Collectors.toList());
+            
+            if (!ownerAppointmentIds.isEmpty()) {
+                try {
+                    int deletedTokens = entityManager.createNativeQuery(
+                        "DELETE FROM appointment_action_tokens WHERE appointment_id IN (:appointmentIds)")
+                        .setParameter("appointmentIds", ownerAppointmentIds)
+                        .executeUpdate();
+                    log.debug("Eliminados {} token(s) de acción para las citas del propietario", deletedTokens);
+                } catch (Exception e) {
+                    log.warn("Error al eliminar tokens de acción del propietario: {}", e.getMessage());
+                }
+            }
+            
+            // Eliminar las citas
+            appointmentRepository.deleteAll(ownerAppointments);
+            entityManager.flush();
+            log.info("Citas del propietario eliminadas exitosamente");
+        }
+
+        // Eliminar consentimientos informados asociados directamente al propietario
+        // (los relacionados con pacientes ya fueron eliminados arriba)
+        @SuppressWarnings("unchecked")
+        List<com.vetclinic.entity.InformedConsent> ownerConsents = entityManager.createQuery(
+            "SELECT ic FROM InformedConsent ic WHERE ic.owner.id = :ownerId")
+            .setParameter("ownerId", id)
+            .getResultList();
+        if (!ownerConsents.isEmpty()) {
+            log.info("Eliminando {} consentimiento(s) informado(s) restantes asociado(s) al propietario", ownerConsents.size());
+            informedConsentRepository.deleteAll(ownerConsents);
+            entityManager.flush();
+            log.info("Consentimientos informados restantes del propietario eliminados exitosamente");
+        }
+
+        // Eliminar usuario asociado primero
+        if (owner.getUserId() != null) {
+            userRepository.findById(owner.getUserId()).ifPresent(user -> {
+                log.info("Eliminando usuario asociado con ID: {}", user.getId());
+                
+                try {
+                    // Verificar si el usuario es veterinario en alguna cita y eliminarlas primero
+                    // Buscar todas las citas donde el usuario es veterinario (activas e inactivas)
+                    List<Appointment> veterinarianAppointments = appointmentRepository.findByVeterinarianIdOrderByScheduledDateDesc(user.getId());
+                    if (!veterinarianAppointments.isEmpty()) {
+                        log.info("El usuario es veterinario en {} cita(s), eliminándolas primero", veterinarianAppointments.size());
+                        for (Appointment appointment : veterinarianAppointments) {
+                            appointmentRepository.delete(appointment);
+                        }
+                        entityManager.flush();
+                    }
+                    
+                    // Eliminar tokens de restablecimiento de contraseña primero usando consulta nativa
+                    int deletedTokens = entityManager.createNativeQuery(
+                        "DELETE FROM password_reset_tokens WHERE user_id = CAST(:userId AS UUID)"
+                    )
+                    .setParameter("userId", user.getId().toString())
+                    .executeUpdate();
+                    
+                    log.info("Tokens de restablecimiento de contraseña eliminados: {} para el usuario: {}", deletedTokens, user.getId());
+                    
+                    // Forzar flush para asegurar que los tokens se eliminen antes del usuario
+                    entityManager.flush();
+                    
+                    // Ahora eliminar el usuario
+                    userRepository.delete(user);
+                    entityManager.flush(); // Asegurar que el usuario se elimine
+                } catch (Exception e) {
+                    log.error("Error al eliminar usuario asociado: {}", e.getMessage(), e);
+                    log.error("Stack trace completo:", e);
+                    throw new IllegalStateException("No se puede eliminar el propietario porque hay un error al eliminar el usuario asociado: " + e.getMessage());
+                }
+            });
+        }
+
+        // Eliminar propietario de la base de datos
+        ownerRepository.delete(owner);
+        
+        log.info("Propietario eliminado exitosamente de la base de datos");
+    }
+
+    /**
+     * Contar propietarios activos
+     */
+    @Transactional(readOnly = true)
+    public long countActiveOwners() {
+        return ownerRepository.countByIsActiveTrue();
+    }
+
+    /**
+     * Obtener propietarios por ciudad
+     */
+    @Transactional(readOnly = true)
+    public List<OwnerDTO> getOwnersByCity(String city) {
+        log.info("Buscando propietarios en la ciudad: {}", city);
+        return ownerRepository.findByCityAndIsActiveTrueOrderByLastNameAsc(city)
+                .stream()
+                .map(owner -> {
+                    User user = owner.getUserId() != null ?
+                            userRepository.findById(owner.getUserId()).orElse(null) : null;
+                    return mapToDTO(owner, user);
+                })
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Mapear entidad a DTO
+     */
+    private OwnerDTO mapToDTO(Owner owner, User user) {
+        OwnerDTO dto = new OwnerDTO();
+        dto.setId(owner.getId());
+        dto.setFirstName(owner.getFirstName());
+        dto.setLastName(owner.getLastName());
+        dto.setFullName(owner.getFullName());
+        dto.setEmail(owner.getEmail());
+        dto.setPhone(owner.getPhone());
+        dto.setAlternativePhone(owner.getAlternativePhone());
+        dto.setAddress(owner.getAddress());
+        dto.setCity(owner.getCity());
+        dto.setPostalCode(owner.getPostalCode());
+        dto.setDocumentType(owner.getDocumentType());
+        dto.setDocumentNumber(owner.getDocumentNumber());
+        dto.setNotes(owner.getNotes());
+        dto.setIsActive(owner.getIsActive());
+        dto.setTotalPatients(owner.getPatients() != null ? owner.getPatients().size() : 0);
+        dto.setUsername(user != null ? user.getUsername() : null);
+        dto.setUserId(owner.getUserId() != null ? owner.getUserId().toString() : null);
+        dto.setCreatedAt(owner.getCreatedAt());
+        dto.setUpdatedAt(owner.getUpdatedAt());
+        return dto;
+    }
+}

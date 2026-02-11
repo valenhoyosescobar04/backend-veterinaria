@@ -1,0 +1,37 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/vetclinic_db}
+    username: ${DATABASE_USERNAME:postgres}
+    password: ${DATABASE_PASSWORD:} 
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+  
+  mail:
+    host: smtp.gmail.com
+    port: 587
+    # ⚠️ Las credenciales se obtienen del archivo .env (cargado automáticamente)
+    # O de variables de entorno del sistema
+    # NO poner credenciales aquí - usar archivo .env
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+    test-connection: false
+  
+  devtools:
+    restart:
+      enabled: false  # Deshabilitado temporalmente para evitar problemas de classloader
+
+logging:
+  level:
+    root: INFO
+    com.vetclinic: DEBUG

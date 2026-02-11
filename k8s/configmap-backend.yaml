@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: vetclinic
+data:
+  SPRING_PROFILES_ACTIVE: "prod"
+  DATABASE_URL: "jdbc:postgresql://postgres-service:5432/vetclinic_db"
+  DATABASE_USERNAME: "postgres"
+  SPRING_JPA_HIBERNATE_DDL_AUTO: "update"
+  FRONTEND_URL: "https://www.vetclinicpro.app"
+  BACKEND_URL: "https://api.vetclinicpro.app"
+  CORS_ORIGINS: "https://www.vetclinicpro.app,https://vetclinicpro.app,http://www.vetclinicpro.app,http://vetclinicpro.app,https://www.vetclinic.com,https://vetclinic.com"
+  CLINIC_NAME: "VetClinic Pro"
+
