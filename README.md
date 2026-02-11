@@ -1,11 +1,11 @@
 # VetClinic Pro – Backend API
 
-Backend RESTful para el sistema integral de gestión de clínicas veterinarias.
-Desarrollado con **Java 17 y Spring Boot 3**, siguiendo buenas prácticas de arquitectura y seguridad.
+RESTful backend for the integrated veterinary clinic management system.
+Developed with **Java 17 and Spring Boot 3**, following software architecture best practices and security standards.
 
 ---
 
-## Stack Tecnológico
+## Technology Stack
 
 * **Java 17**
 * **Spring Boot 3**
@@ -13,60 +13,60 @@ Desarrollado con **Java 17 y Spring Boot 3**, siguiendo buenas prácticas de arq
 * **Spring Data JPA (Hibernate)**
 * **PostgreSQL**
 * **Maven**
-* **Docker (opcional)**
+* **Docker (optional)**
 
 ---
 
-## Arquitectura
+## Architecture
 
-El sistema está diseñado bajo los siguientes enfoques arquitectónicos:
+The system is designed following these architectural approaches:
 
-1. **Arquitectura Cliente-Servidor**
-   Comunicación mediante API REST entre cliente (frontend) y servidor backend.
+1. **Client–Server Architecture**
+   Communication through a REST API between the client (frontend) and the backend server.
 
-2. **Arquitectura Multicapa (Layered Architecture)**
-   Separación clara de responsabilidades:
+2. **Layered Architecture (Multitier)**
+   Clear separation of responsibilities:
 
-   * Controller
-   * Service
-   * Repository
-   * Entity
+   * Controller Layer
+   * Service Layer
+   * Repository Layer
+   * Entity Layer
 
-3. **Arquitectura Orientada a Objetos (OOP)**
-   Aplicación de principios SOLID, encapsulamiento, herencia y polimorfismo.
+3. **Object-Oriented Architecture (OOP)**
+   Implementation based on SOLID principles, encapsulation, inheritance, and polymorphism.
 
-4. **Arquitectura Orientada a Datos**
-   Persistencia estructurada mediante JPA/Hibernate y PostgreSQL.
-
----
-
-## Seguridad
-
-* Autenticación basada en **JWT**
-* Control de acceso por roles (RBAC)
-* Encriptación de contraseñas con **BCrypt**
-* Protección de endpoints con Spring Security
+4. **Data-Oriented Architecture**
+   Structured data persistence using JPA/Hibernate and PostgreSQL.
 
 ---
 
-## Requisitos
+## Security
+
+* JWT-based authentication
+* Role-Based Access Control (RBAC)
+* Password encryption using **BCrypt**
+* Secured endpoints with Spring Security
+
+---
+
+## Requirements
 
 * JDK 17+
 * Maven 3.8+
 * PostgreSQL 14+
-* Docker (opcional)
+* Docker (optional)
 
 ---
 
-## Ejecución
+## Running the Application
 
-### Desarrollo
+### Development
 
 ```bash
 mvn spring-boot:run
 ```
 
-### Producción
+### Production
 
 ```bash
 mvn clean package
@@ -75,9 +75,9 @@ java -jar target/vetclinic-backend.jar
 
 ---
 
-## Documentación API
+## API Documentation
 
-Swagger disponible en:
+Swagger UI available at:
 
 ```
 http://localhost:8080/swagger-ui.html
@@ -85,16 +85,16 @@ http://localhost:8080/swagger-ui.html
 
 ---
 
-## Estrategia de Ramas
+## Branching Strategy
 
-* `main` → Producción estable
-* `develop` → Integración de desarrollo
-* `feature/*` → Nuevas funcionalidades
+* `main` → Stable production branch
+* `develop` → Development integration branch
+* `feature/*` → Feature implementation branches
 
 ---
 
-**Versión:** 1.0.0
-**Tecnología Principal:** Spring Boot 3
-**Tipo de Proyecto:** API REST Empresarial
+**Version:** 1.0.0
+**Main Technology:** Spring Boot 3
+**Project Type:** Enterprise REST API
 
 ---
