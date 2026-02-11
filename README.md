@@ -94,7 +94,9 @@ http://localhost:8080/swagger-ui.html
 ---
 
 **Version:** 1.0.0
+
 **Main Technology:** Spring Boot 3
+
 **Project Type:** Enterprise REST API
 
 ---
