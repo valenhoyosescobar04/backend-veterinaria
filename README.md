@@ -75,7 +75,7 @@ java -jar target/vetclinic-backend.jar
 
 ---
 
-## 📡 Documentación API
+## Documentación API
 
 Swagger disponible en:
 
